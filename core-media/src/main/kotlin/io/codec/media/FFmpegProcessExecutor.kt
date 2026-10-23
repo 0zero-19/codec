@@ -40,7 +40,7 @@ class FFmpegProcessExecutor(
         val outputFile = File(outputPath)
         outputFile.parentFile?.mkdirs()
 
-        val tempOutputFile = File("${outputPath}.part")
+        val tempOutputFile = File(outputFile.parentFile, ".codec_tmp_${outputFile.name}")
         if (tempOutputFile.exists()) {
             tempOutputFile.delete()
         }
