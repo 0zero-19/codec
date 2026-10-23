@@ -169,8 +169,8 @@ private fun GifMakerTool(state: DesktopState) {
                 val out = File(f.parentFile, "${f.nameWithoutExtension}.gif")
                 state.scope.launch {
                     statusMsg = "Generating 2-pass palette GIF..."
-                    val res = state.tools.trim(f, out, s, s + d, streamCopy = false)
-                    statusMsg = if (res.isSuccess) "Saved: ${out.name}" else "Finished"
+                    val res = state.tools.createGif(f, out, s, d, fps.toInt())
+                    statusMsg = if (res.isSuccess) "Saved: ${out.name}" else "Finished: ${res.exceptionOrNull()?.message}"
                 }
             },
             enabled = inputFile != null

@@ -7,3 +7,7 @@ local.properties
 .DS_Store
 *.hprof
 .kotlin
+bin/
+/*/bin/
+*.log
+build_err.txt
