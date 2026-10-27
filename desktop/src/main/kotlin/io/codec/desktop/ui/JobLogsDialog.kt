@@ -55,12 +55,25 @@ fun JobLogsDialog(
                         )
                     }
 
-                    Button(
-                        onClick = onDismiss,
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Text("Close", fontSize = 12.sp, color = Color.White)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val fullLog = job.ffmpegLog.joinToString("\n")
+                                val selection = java.awt.datatransfer.StringSelection(fullLog)
+                                java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
+                            },
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text("Copy Log", fontSize = 12.sp, color = Color.White)
+                        }
+
+                        Button(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(6.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Text("Close", fontSize = 12.sp, color = Color.White)
+                        }
                     }
                 }
 

@@ -14,6 +14,16 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
+data class QueueStats(
+    val totalCount: Int,
+    val completedCount: Int,
+    val runningCount: Int,
+    val pendingCount: Int,
+    val failedCount: Int,
+    val overallProgress: Double,
+    val totalRemainingEtaSeconds: Long
+)
+
 class TaskQueueManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
     private val analyzer: FFprobeAnalyzer = FFprobeAnalyzer(),
@@ -34,7 +44,10 @@ class TaskQueueManager(
     private val activeCoroutines = mutableMapOf<String, Job>()
 
     @Volatile
-    private var isQueueProcessingActive = true
+    private var isQueueProcessingActive = false
+
+    val isQueueActive: Boolean
+        get() = isQueueProcessingActive
 
     init {
         loadPersistedQueue()
@@ -49,14 +62,21 @@ class TaskQueueManager(
         inputFile: File,
         outputDir: File,
         options: ConversionOptions = ConversionOptions(),
-        priority: TaskPriority = TaskPriority.NORMAL
+        priority: TaskPriority = TaskPriority.NORMAL,
+        autoStart: Boolean = false
     ): TaskJob = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val baseName = inputFile.nameWithoutExtension
         val ext = options.video.container.extension
-        val outputPath = resolveUniqueOutputPath(outputDir, baseName, ext)
+        val outputPath = resolveOutputPath(
+            dir = outputDir,
+            baseName = baseName,
+            ext = ext,
+            behavior = options.collisionBehavior,
+            template = options.outputFileNameTemplate,
+            mediaInfo = null
+        )
 
-        // Initial task
         val job = TaskJob(
             id = id,
             inputPath = inputFile.absolutePath,
@@ -71,7 +91,7 @@ class TaskQueueManager(
 
         // Asynchronously probe media info
         scope.launch {
-            probeJobMedia(id, inputFile)
+            probeJobMedia(id, inputFile, autoStart)
         }
 
         job
@@ -80,24 +100,40 @@ class TaskQueueManager(
     suspend fun addBatchJobs(
         inputFiles: List<File>,
         outputDir: File,
-        options: ConversionOptions = ConversionOptions()
+        options: ConversionOptions = ConversionOptions(),
+        autoStart: Boolean = false
     ): List<TaskJob> = withContext(Dispatchers.IO) {
         val newJobs = mutableListOf<TaskJob>()
         for (file in inputFiles) {
-            val job = addJob(file, outputDir, options)
+            val job = addJob(file, outputDir, options, autoStart = autoStart)
             newJobs.add(job)
+        }
+        if (autoStart) {
+            startQueue()
         }
         newJobs
     }
 
-    private suspend fun probeJobMedia(jobId: String, file: File) {
+    private suspend fun probeJobMedia(jobId: String, file: File, autoStart: Boolean) {
         updateJob(jobId) { it.copy(status = TaskStatus.PROBING) }
         val result = analyzer.analyze(file)
         if (result.isSuccess) {
             val info = result.getOrThrow()
             updateJob(jobId) {
+                // Also update output path if template depends on resolution/codec
+                val currentOptions = it.options
+                val dir = File(it.outputPath).parentFile ?: File(".")
+                val refreshedOut = resolveOutputPath(
+                    dir = dir,
+                    baseName = file.nameWithoutExtension,
+                    ext = currentOptions.video.container.extension,
+                    behavior = currentOptions.collisionBehavior,
+                    template = currentOptions.outputFileNameTemplate,
+                    mediaInfo = info
+                )
                 it.copy(
                     mediaInfo = info,
+                    outputPath = refreshedOut,
                     status = TaskStatus.PENDING,
                     totalDurationMs = (info.durationSeconds * 1000).toLong()
                 )
@@ -107,7 +143,9 @@ class TaskQueueManager(
                 it.copy(status = TaskStatus.PENDING)
             }
         }
-        triggerNextJobs()
+        if (autoStart || isQueueProcessingActive) {
+            triggerNextJobs()
+        }
     }
 
     fun startQueue() {
@@ -157,18 +195,39 @@ class TaskQueueManager(
         triggerNextJobs()
     }
 
-    fun retryJob(id: String) {
-        updateJob(id) {
-            it.copy(
+    fun retryJob(id: String, newOptions: ConversionOptions? = null) {
+        updateJob(id) { job ->
+            val updatedOptions = newOptions ?: job.options
+            val inputFile = File(job.inputPath)
+            val outDir = if (!updatedOptions.outputDirectory.isNullOrBlank()) {
+                File(updatedOptions.outputDirectory)
+            } else {
+                File(job.outputPath).parentFile ?: File(".")
+            }
+            val newOutPath = resolveOutputPath(
+                dir = outDir,
+                baseName = inputFile.nameWithoutExtension,
+                ext = updatedOptions.video.container.extension,
+                behavior = updatedOptions.collisionBehavior,
+                template = updatedOptions.outputFileNameTemplate,
+                mediaInfo = job.mediaInfo
+            )
+            job.copy(
+                options = updatedOptions,
+                outputPath = newOutPath,
                 status = TaskStatus.PENDING,
                 progress = 0.0,
                 currentFps = 0.0,
                 speedMultiplier = 0.0,
                 etaSeconds = 0,
-                errorMessage = null
+                errorMessage = null,
+                startedAtMs = null,
+                finishedAtMs = null
             )
         }
-        triggerNextJobs()
+        if (isQueueProcessingActive) {
+            triggerNextJobs()
+        }
     }
 
     fun removeJob(id: String) {
@@ -186,16 +245,56 @@ class TaskQueueManager(
 
     fun updateJobOptions(id: String, options: ConversionOptions) {
         updateJob(id) { job ->
-            if (job.status == TaskStatus.PENDING) {
-                val base = File(job.outputPath).nameWithoutExtension
-                val dir = File(job.outputPath).parentFile ?: File(".")
-                val ext = options.video.container.extension
-                val newOutput = resolveUniqueOutputPath(dir, base, ext)
+            if (job.status == TaskStatus.PENDING || job.status == TaskStatus.FAILED || job.status == TaskStatus.CANCELLED) {
+                val inputFile = File(job.inputPath)
+                val outDir = if (!options.outputDirectory.isNullOrBlank()) {
+                    File(options.outputDirectory)
+                } else {
+                    File(job.outputPath).parentFile ?: File(".")
+                }
+                val newOutput = resolveOutputPath(
+                    dir = outDir,
+                    baseName = inputFile.nameWithoutExtension,
+                    ext = options.video.container.extension,
+                    behavior = options.collisionBehavior,
+                    template = options.outputFileNameTemplate,
+                    mediaInfo = job.mediaInfo
+                )
                 job.copy(options = options, outputPath = newOutput)
             } else {
                 job
             }
         }
+    }
+
+    fun getQueueStats(): QueueStats {
+        val current = _jobs.value
+        if (current.isEmpty()) return QueueStats(0, 0, 0, 0, 0, 0.0, 0L)
+        val total = current.size
+        val completed = current.count { it.status == TaskStatus.COMPLETED }
+        val running = current.count { it.status == TaskStatus.RUNNING }
+        val pending = current.count { it.status == TaskStatus.PENDING || it.status == TaskStatus.PROBING }
+        val failed = current.count { it.status == TaskStatus.FAILED || it.status == TaskStatus.CANCELLED }
+
+        val totalProgressSum = current.sumOf {
+            when (it.status) {
+                TaskStatus.COMPLETED -> 100.0
+                TaskStatus.RUNNING -> it.progress
+                else -> 0.0
+            }
+        }
+        val overallProgress = totalProgressSum / total
+        val remainingEta = current.filter { it.status == TaskStatus.RUNNING }.sumOf { it.etaSeconds }
+
+        return QueueStats(
+            totalCount = total,
+            completedCount = completed,
+            runningCount = running,
+            pendingCount = pending,
+            failedCount = failed,
+            overallProgress = overallProgress,
+            totalRemainingEtaSeconds = remainingEta
+        )
     }
 
     private fun triggerNextJobs() {
@@ -227,6 +326,21 @@ class TaskQueueManager(
 
     private suspend fun runJob(jobId: String) {
         val currentJob = _jobs.value.firstOrNull { it.id == jobId } ?: return
+
+        // Check if collision behavior is SKIP and output already exists
+        if (currentJob.options.collisionBehavior == FileCollisionBehavior.SKIP && File(currentJob.outputPath).exists()) {
+            updateJob(jobId) {
+                it.copy(
+                    status = TaskStatus.COMPLETED,
+                    progress = 100.0,
+                    outputSizeBytes = File(currentJob.outputPath).length(),
+                    finishedAtMs = System.currentTimeMillis()
+                )
+            }
+            persistQueue()
+            return
+        }
+
         val executor = FFmpegProcessExecutor()
         activeExecutors[jobId] = executor
 
@@ -307,15 +421,46 @@ class TaskQueueManager(
         }
     }
 
-    private fun resolveUniqueOutputPath(dir: File, baseName: String, extension: String): String {
+    fun resolveOutputPath(
+        dir: File,
+        baseName: String,
+        ext: String,
+        behavior: FileCollisionBehavior,
+        template: String?,
+        mediaInfo: MediaInfo? = null
+    ): String {
         dir.mkdirs()
-        var target = File(dir, "$baseName.$extension")
-        var counter = 1
-        while (target.exists()) {
-            target = File(dir, "$baseName ($counter).$extension")
-            counter++
+        val templateStr = if (template.isNullOrBlank()) "{name}_converted.{ext}" else template
+        val resLabel = mediaInfo?.resolutionLabel?.replace(" ", "") ?: ""
+        val codecLabel = mediaInfo?.primaryVideoStream?.codecName ?: ""
+
+        val rawName = templateStr
+            .replace("{name}", baseName)
+            .replace("{ext}", ext)
+            .replace("{resolution}", resLabel)
+            .replace("{codec}", codecLabel)
+
+        val formattedName = if (rawName.endsWith(".$ext", ignoreCase = true)) rawName else "$rawName.$ext"
+        val cleanBase = formattedName.substringBeforeLast('.')
+        val target = File(dir, formattedName)
+
+        return when (behavior) {
+            FileCollisionBehavior.OVERWRITE -> target.absolutePath
+            FileCollisionBehavior.SKIP -> target.absolutePath
+            FileCollisionBehavior.UNIQUE_NAME -> {
+                if (!target.exists()) {
+                    target.absolutePath
+                } else {
+                    var counter = 1
+                    var candidate = File(dir, "$cleanBase ($counter).$ext")
+                    while (candidate.exists()) {
+                        counter++
+                        candidate = File(dir, "$cleanBase ($counter).$ext")
+                    }
+                    candidate.absolutePath
+                }
+            }
         }
-        return target.absolutePath
     }
 
     private fun loadPersistedQueue() {

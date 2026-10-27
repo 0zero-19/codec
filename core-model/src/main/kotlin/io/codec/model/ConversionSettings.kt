@@ -8,6 +8,7 @@ data class VideoSettings(
     val container: ContainerFormat = ContainerFormat.MP4,
     val hardwareEncoder: HardwareEncoder = HardwareEncoder.AUTO,
     val qualityMode: QualityMode = QualityMode.CRF,
+    val compressionMode: CompressionPresetMode = CompressionPresetMode.BALANCED,
     val crf: Int = 23,
     val videoBitrateKbps: Int = 2500,
     val targetSizeMb: Double? = null,
@@ -25,7 +26,8 @@ data class VideoSettings(
     val gopSize: Int? = null,
     val bFrames: Int? = null,
     val pixelFormat: String? = "yuv420p",
-    val hdrToSdrTonemap: Boolean = false
+    val hdrToSdrTonemap: Boolean = false,
+    val selectedVideoStreamIndex: Int? = null
 )
 
 @Serializable
@@ -37,7 +39,9 @@ data class AudioSettings(
     val volumeMultiplier: Float = 1.0f,
     val normalizeLoudness: Boolean = false,
     val dynamicAudioNormalizer: Boolean = false,
-    val stripAudio: Boolean = false
+    val stripAudio: Boolean = false,
+    val selectedAudioStreamIndex: Int? = null,
+    val audioTrackTitle: String? = null
 )
 
 @Serializable
@@ -75,5 +79,8 @@ data class ConversionOptions(
     val trimStartTimeSeconds: Double? = null,
     val trimEndTimeSeconds: Double? = null,
     val customFfmpegArgs: String? = null,
-    val stripMetadata: Boolean = false
+    val stripMetadata: Boolean = false,
+    val collisionBehavior: FileCollisionBehavior = FileCollisionBehavior.UNIQUE_NAME,
+    val outputFileNameTemplate: String = "{name}_converted.{ext}",
+    val outputDirectory: String? = null
 )

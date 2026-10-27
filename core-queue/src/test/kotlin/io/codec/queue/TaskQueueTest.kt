@@ -91,4 +91,44 @@ class TaskQueueTest {
         assertEquals(TaskStatus.COMPLETED, completed?.status, "Job should complete successfully")
         assertTrue(File(completed!!.outputPath).exists(), "Output file must exist")
     }
+
+    @Test
+    fun testFilenameResolutionAndCollision() {
+        val outDir = File(tempDir, "collision_test")
+        outDir.mkdirs()
+        val queue = TaskQueueManager(storageDir = tempDir)
+
+        val out1 = queue.resolveOutputPath(
+            dir = outDir,
+            baseName = "video_one",
+            ext = "mp4",
+            behavior = FileCollisionBehavior.UNIQUE_NAME,
+            template = "{name}_converted.{ext}"
+        )
+        val file1 = File(out1)
+        file1.writeText("placeholder")
+
+        // Next call with UNIQUE_NAME should generate a unique name with (1)
+        val out2 = queue.resolveOutputPath(
+            dir = outDir,
+            baseName = "video_one",
+            ext = "mp4",
+            behavior = FileCollisionBehavior.UNIQUE_NAME,
+            template = "{name}_converted.{ext}"
+        )
+        assertTrue(out2.contains("(1)"), "Unique name should add (1)")
+
+        // OVERWRITE should return exact path
+        val outOverwrite = queue.resolveOutputPath(
+            dir = outDir,
+            baseName = "video_one",
+            ext = "mp4",
+            behavior = FileCollisionBehavior.OVERWRITE,
+            template = "{name}_converted.{ext}"
+        )
+        assertEquals(file1.absolutePath, outOverwrite)
+
+        file1.delete()
+        File(out2).delete()
+    }
 }

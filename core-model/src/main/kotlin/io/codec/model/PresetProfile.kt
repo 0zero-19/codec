@@ -20,7 +20,8 @@ data class PresetProfile(
     val description: String,
     val category: ProfileCategory,
     val options: ConversionOptions,
-    val isBuiltIn: Boolean = false
+    val isBuiltIn: Boolean = false,
+    val isDefault: Boolean = false
 )
 
 @Serializable
@@ -47,5 +48,8 @@ data class AppConfig(
     val overwriteExistingFiles: Boolean = false,
     val fileNamingTemplate: String = "{name}_converted.{ext}",
     val preferredVideoCodec: VideoCodec = VideoCodec.H264,
-    val preferredAudioCodec: AudioCodec = AudioCodec.AAC
+    val preferredAudioCodec: AudioCodec = AudioCodec.AAC,
+    val defaultPresetId: String = "builtin-batch-convert",
+    val defaultCollisionBehavior: FileCollisionBehavior = FileCollisionBehavior.UNIQUE_NAME,
+    val lastUsedOptions: ConversionOptions? = null
 )

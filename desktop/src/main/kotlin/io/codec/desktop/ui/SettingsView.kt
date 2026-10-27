@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.codec.model.AppLanguage
+import io.codec.model.FileCollisionBehavior
 import io.codec.model.HardwareEncoder
 import io.codec.model.ThemeMode
 import java.awt.FileDialog
@@ -47,7 +48,12 @@ fun SettingsView(state: DesktopState, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("General Settings", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CodecColors.PrimaryCyan)
+                Text(
+                    text = if (lang == AppLanguage.RU) "Основные параметры" else "General Preferences",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CodecColors.PrimaryCyan
+                )
 
                 // Language
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -111,6 +117,31 @@ fun SettingsView(state: DesktopState, modifier: Modifier = Modifier) {
                     }
                 }
 
+                // Default Collision Behavior
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(Strings.get("collision_behavior", lang), fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FileCollisionBehavior.entries.forEach { b ->
+                            FilterChip(
+                                selected = state.config.defaultCollisionBehavior == b,
+                                onClick = { state.setDefaultCollisionBehavior(b) },
+                                label = { Text(b.displayName, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+
+                // Default Naming Template
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(Strings.get("naming_template", lang), fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = state.config.fileNamingTemplate,
+                        onValueChange = { state.setDefaultNamingTemplate(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
+                    )
+                }
+
                 // Max Concurrent Tasks
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("${Strings.get("settings_max_concurrent", lang)}: ${state.config.maxConcurrentTasks}", fontSize = 13.sp)
@@ -131,7 +162,12 @@ fun SettingsView(state: DesktopState, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Hardware Acceleration Engines", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CodecColors.PrimaryCyan)
+                Text(
+                    text = if (lang == AppLanguage.RU) "Аппаратное ускорение" else "Hardware Acceleration Engines",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CodecColors.PrimaryCyan
+                )
 
                 val availableModes = caps?.supportedHardwareModes ?: listOf(HardwareEncoder.SOFTWARE)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -153,10 +189,15 @@ fun SettingsView(state: DesktopState, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("FFmpeg Engine Diagnostics", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = CodecColors.PrimaryCyan)
-                Text("Installed Core: ${caps?.ffmpegVersion ?: "Detecting..."}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                Text("Detected Hardware Accelerators: ${caps?.availableHwaccels?.joinToString(", ") ?: "None"}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Total Registered Encoders: ${caps?.availableEncoders?.size ?: 0}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = if (lang == AppLanguage.RU) "Диагностика ядра FFmpeg" else "FFmpeg Engine Diagnostics",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CodecColors.PrimaryCyan
+                )
+                Text("Version: ${caps?.ffmpegVersion ?: "Detecting..."}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                Text("Accelerators: ${caps?.availableHwaccels?.joinToString(", ") ?: "None"}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Registered Encoders: ${caps?.availableEncoders?.size ?: 0}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

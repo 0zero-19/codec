@@ -30,6 +30,7 @@ fun QueueView(
     modifier: Modifier = Modifier
 ) {
     val lang = state.config.language
+    val stats = state.queueManager.getQueueStats()
 
     Column(
         modifier = modifier
@@ -38,7 +39,7 @@ fun QueueView(
     ) {
         // Toolbar
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -77,12 +78,6 @@ fun QueueView(
 
             // Task count & Concurrency summary
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "${state.jobs.size} ${Strings.get("size", lang).lowercase()}",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(12.dp))
                 AssistChip(
                     onClick = {
                         val next = when (state.config.maxConcurrentTasks) {
@@ -94,12 +89,73 @@ fun QueueView(
                         state.setMaxConcurrency(next)
                     },
                     label = {
-                        Text("${state.config.maxConcurrentTasks} parallel", fontSize = 11.sp)
+                        Text("${state.config.maxConcurrentTasks} ${Strings.get("parallel_workers", lang).lowercase()}", fontSize = 11.sp)
                     },
                     leadingIcon = {
                         Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(14.dp))
                     }
                 )
+            }
+        }
+
+        // Overall Queue Summary Bar (if tasks exist)
+        if (state.jobs.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text(
+                                text = "${Strings.get("completed_count", lang)}: ${stats.completedCount}/${stats.totalCount}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${Strings.get("remaining_count", lang)}: ${stats.pendingCount + stats.runningCount}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (stats.failedCount > 0) {
+                                Text(
+                                    text = "${Strings.get("failed_count", lang)}: ${stats.failedCount}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CodecColors.AccentRed
+                                )
+                            }
+                        }
+
+                        if (stats.totalRemainingEtaSeconds > 0) {
+                            val mins = stats.totalRemainingEtaSeconds / 60
+                            val secs = stats.totalRemainingEtaSeconds % 60
+                            Text(
+                                text = "${Strings.get("total_eta", lang)}: ${String.format("%02d:%02d", mins, secs)}*",
+                                fontSize = 11.sp,
+                                color = CodecColors.PrimaryCyan
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    LinearProgressIndicator(
+                        progress = { (stats.overallProgress / 100.0).toFloat().coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = CodecColors.AccentGreen,
+                        trackColor = MaterialTheme.colorScheme.surface
+                    )
+                }
             }
         }
 
@@ -117,6 +173,7 @@ fun QueueView(
                         isSelected = state.selectedJobId == job.id,
                         lang = lang,
                         onSelect = { state.selectedJobId = job.id },
+                        onEdit = { state.openConfigForExistingJob(job) },
                         onPause = { state.queueManager.pauseJob(job.id) },
                         onResume = { state.queueManager.resumeJob(job.id) },
                         onCancel = { state.queueManager.cancelJob(job.id) },
@@ -196,6 +253,7 @@ fun JobCard(
     isSelected: Boolean,
     lang: io.codec.model.AppLanguage,
     onSelect: () -> Unit,
+    onEdit: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
@@ -245,7 +303,7 @@ fun JobCard(
                             val dur = job.mediaInfo?.formattedDuration ?: "--:--"
                             val res = job.mediaInfo?.resolutionLabel ?: ""
                             Text(
-                                text = "$dur ${if (res.isNotBlank()) "• $res" else ""} → ${job.options.video.container.extension.uppercase()} (${job.options.video.codec.displayName})",
+                                text = "$dur ${if (res.isNotBlank()) "• $res" else ""} → ${job.options.video.container.extension.uppercase()} (${job.options.video.codec.displayName.substringBefore(" ")})",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -258,7 +316,7 @@ fun JobCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Progress Bar & Live Info (if running/paused/failed)
+            // Progress Bar & Live Info (if running/paused/completed)
             if (job.status == TaskStatus.RUNNING || job.status == TaskStatus.PAUSED || job.status == TaskStatus.COMPLETED) {
                 LinearProgressIndicator(
                     progress = { (job.progress / 100.0).toFloat().coerceIn(0f, 1f) },
@@ -292,7 +350,7 @@ fun JobCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "${Strings.get("eta", lang)}: ${job.formattedEta}",
+                                text = "${Strings.get("eta", lang)}: ${job.formattedEta}*",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -348,7 +406,14 @@ fun JobCard(
                 }
 
                 // Right buttons
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Edit settings button for pending or failed jobs
+                    if (job.status == TaskStatus.PENDING || job.status == TaskStatus.FAILED || job.status == TaskStatus.CANCELLED) {
+                        IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Tune, contentDescription = Strings.get("btn_edit_retry", lang), modifier = Modifier.size(16.dp))
+                        }
+                    }
+
                     when (job.status) {
                         TaskStatus.RUNNING -> {
                             IconButton(onClick = onPause, modifier = Modifier.size(28.dp)) {
@@ -370,13 +435,14 @@ fun JobCard(
                             IconButton(
                                 onClick = {
                                     val f = File(job.outputPath)
-                                    if (f.exists()) {
-                                        Desktop.getDesktop().open(f.parentFile)
+                                    val targetDir = if (f.exists()) f.parentFile else f.parentFile
+                                    if (targetDir != null && targetDir.exists()) {
+                                        Desktop.getDesktop().open(targetDir)
                                     }
                                 },
                                 modifier = Modifier.size(28.dp)
                             ) {
-                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.FolderOpen, contentDescription = Strings.get("btn_open_folder", lang), modifier = Modifier.size(16.dp))
                             }
                             IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
                                 Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -384,7 +450,7 @@ fun JobCard(
                         }
                         TaskStatus.FAILED, TaskStatus.CANCELLED -> {
                             IconButton(onClick = onRetry, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, tint = CodecColors.PrimaryCyan, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Refresh, contentDescription = Strings.get("btn_retry", lang), tint = CodecColors.PrimaryCyan, modifier = Modifier.size(16.dp))
                             }
                             IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
                                 Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))

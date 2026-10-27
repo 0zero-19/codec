@@ -1,6 +1,7 @@
 package io.codec.desktop.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,7 +32,7 @@ fun TaskSettingsPanel(
         Box(
             modifier = modifier
                 .fillMaxHeight()
-                .width(360.dp)
+                .width(380.dp)
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(24.dp),
             contentAlignment = Alignment.Center
@@ -51,7 +52,7 @@ fun TaskSettingsPanel(
     val filter = options.filter
     val scrollState = rememberScrollState()
 
-    var activeTab by remember { mutableStateOf(0) } // 0: Video & Size, 1: Audio, 2: Filters & Subs, 3: Expert
+    var activeTab by remember { mutableStateOf(0) } // 0: Video & Size, 1: Audio, 2: Filters, 3: More
 
     Column(
         modifier = modifier
@@ -60,60 +61,61 @@ fun TaskSettingsPanel(
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp)
     ) {
-        // Title
+        // Title & Reset
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = Strings.get("settings_panel_title", lang),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            // Apply preset button
-            TextButton(
-                onClick = {
-                    val p = state.profiles.firstOrNull { it.id == "builtin-fast-1080p" }
-                    if (p != null) state.applyProfileToSelectedJob(p)
+            Column {
+                Text(
+                    text = Strings.get("settings_panel_title", lang),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = job.inputFileName,
+                    fontSize = 11.sp,
+                    color = CodecColors.PrimaryCyan,
+                    maxLines = 1
+                )
+            }
+
+            Row {
+                IconButton(
+                    onClick = { state.openConfigForExistingJob(job) },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(Icons.Default.OpenInFull, contentDescription = "Expand", modifier = Modifier.size(16.dp))
                 }
-            ) {
-                Text("Reset", fontSize = 11.sp)
+                TextButton(
+                    onClick = {
+                        val p = state.profileRepo.getDefaultProfile()
+                        state.applyProfileToSelectedJob(p)
+                    }
+                ) {
+                    Text(Strings.get("btn_reset_settings", lang), fontSize = 11.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // Preset Quick Carousel (from state.profiles)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            state.profiles.take(3).forEach { p ->
+                AssistChip(
+                    onClick = { state.applyProfileToSelectedJob(p) },
+                    label = { Text(p.name.substringBefore("/").substringBefore("(").trim(), fontSize = 10.sp) }
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-
-        // Preset Chips Carousel / Selection
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AssistChip(
-                onClick = {
-                    state.profiles.firstOrNull { it.id == "builtin-fast-1080p" }?.let {
-                        state.applyProfileToSelectedJob(it)
-                    }
-                },
-                label = { Text("Fast 1080p", fontSize = 11.sp) }
-            )
-            AssistChip(
-                onClick = {
-                    state.profiles.firstOrNull { it.id == "builtin-discord-25mb" }?.let {
-                        state.applyProfileToSelectedJob(it)
-                    }
-                },
-                label = { Text("Discord 25M", fontSize = 11.sp) }
-            )
-            AssistChip(
-                onClick = {
-                    state.profiles.firstOrNull { it.id == "builtin-telegram-video" }?.let {
-                        state.applyProfileToSelectedJob(it)
-                    }
-                },
-                label = { Text("Telegram", fontSize = 11.sp) }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
 
         // Tab Selector
         TabRow(
@@ -135,12 +137,13 @@ fun TaskSettingsPanel(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Scrollable Settings Content
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .weight(1f)
+                .fillMaxWidth()
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -169,8 +172,10 @@ private fun VideoTabContent(
             FilterChip(
                 selected = video.container == format,
                 onClick = {
+                    val supportedV = format.supportedVideoCodecs()
+                    val newVCodec = if (supportedV.contains(video.codec)) video.codec else supportedV.first()
                     state.updateSelectedJobOptions(
-                        options.copy(video = video.copy(container = format))
+                        options.copy(video = video.copy(container = format, codec = newVCodec))
                     )
                 },
                 label = { Text(format.extension.uppercase(), fontSize = 11.sp) }
@@ -178,10 +183,27 @@ private fun VideoTabContent(
         }
     }
 
+    if (video.container.isAudioOnly) {
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+        ) {
+            Text(
+                text = "Audio-only container. Video disabled.",
+                fontSize = 11.sp,
+                color = CodecColors.PrimaryCyan,
+                modifier = Modifier.padding(8.dp)
+            )
+        }
+        return
+    }
+
     // Video Codec
     Text(Strings.get("video_codec", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    val availableCodecs = video.container.supportedVideoCodecs()
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(VideoCodec.H264, VideoCodec.H265, VideoCodec.AV1, VideoCodec.VP9, VideoCodec.COPY).forEach { codec ->
+        availableCodecs.forEach { codec ->
             FilterChip(
                 selected = video.codec == codec,
                 onClick = {
@@ -190,6 +212,28 @@ private fun VideoTabContent(
                     )
                 },
                 label = { Text(codec.displayName.substringBefore(" "), fontSize = 11.sp) }
+            )
+        }
+    }
+
+    // Compression Mode
+    Text(Strings.get("compression_mode", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        CompressionPresetMode.entries.forEach { mode ->
+            FilterChip(
+                selected = video.compressionMode == mode,
+                onClick = {
+                    val crf = when (mode) {
+                        CompressionPresetMode.MAX_QUALITY -> 18
+                        CompressionPresetMode.BALANCED -> 22
+                        CompressionPresetMode.MIN_SIZE -> 28
+                        CompressionPresetMode.CUSTOM -> video.crf
+                    }
+                    state.updateSelectedJobOptions(
+                        options.copy(video = video.copy(compressionMode = mode, crf = crf))
+                    )
+                },
+                label = { Text(mode.displayName.substringBefore(" "), fontSize = 10.sp) }
             )
         }
     }
@@ -254,7 +298,7 @@ private fun VideoTabContent(
                 Text("${targetMb.toInt()} MB", fontWeight = FontWeight.Bold, fontSize = 12.sp)
             }
             Text(
-                text = "Calc bitrate: ~${estBitrate} kbps",
+                text = "${Strings.get("calculated_bitrate", lang)}: ~${estBitrate} kbps",
                 fontSize = 11.sp,
                 color = CodecColors.PrimaryCyan
             )
@@ -304,8 +348,9 @@ private fun AudioTabContent(
 ) {
     // Audio Codec
     Text(Strings.get("audio_codec", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    val availableCodecs = options.video.container.supportedAudioCodecs()
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(AudioCodec.AAC, AudioCodec.MP3, AudioCodec.OPUS, AudioCodec.FLAC, AudioCodec.COPY).forEach { codec ->
+        availableCodecs.forEach { codec ->
             FilterChip(
                 selected = audio.codec == codec,
                 onClick = {
@@ -420,7 +465,7 @@ private fun FiltersTabContent(
         Text(Strings.get("sharpen", lang), fontSize = 12.sp)
     }
 
-    Text(Strings.get("rotate", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    Text(Strings.get("rotation_title", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(0, 90, 180, 270).forEach { deg ->
             FilterChip(
@@ -443,7 +488,7 @@ private fun AdvancedTabContent(
     options: ConversionOptions,
     lang: AppLanguage
 ) {
-    Text(Strings.get("section_advanced", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    Text(Strings.get("tab_advanced", lang), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(

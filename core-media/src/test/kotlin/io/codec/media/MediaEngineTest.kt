@@ -124,6 +124,27 @@ class MediaEngineTest {
         assertTrue(cmd.contains("128k"))
         assertTrue(cmd.contains("-progress"))
         assertTrue(cmd.contains("output.mp4"))
+        assertTrue(cmd.contains("-tag:v"))
+        assertTrue(cmd.contains("hvc1"))
+        assertTrue(cmd.contains("-movflags"))
+        assertTrue(cmd.contains("+faststart"))
+    }
+
+    @Test
+    fun testContainerCompatibility() {
+        // WebM cannot accept H.264
+        assertFalse(ContainerFormat.WEBM.isCompatibleWith(VideoCodec.H264, AudioCodec.OPUS))
+        assertTrue(ContainerFormat.WEBM.isCompatibleWith(VideoCodec.VP9, AudioCodec.OPUS))
+        assertNotNull(ContainerFormat.WEBM.getCompatibilityWarning(VideoCodec.H264, AudioCodec.OPUS))
+
+        // MP4 supports H.264, H.265, AV1 with AAC, MP3, Opus
+        assertTrue(ContainerFormat.MP4.isCompatibleWith(VideoCodec.H265, AudioCodec.AAC))
+        assertTrue(ContainerFormat.MP4.isCompatibleWith(VideoCodec.H264, AudioCodec.AAC))
+
+        // MP3 is audio-only
+        assertTrue(ContainerFormat.MP3.isAudioOnly)
+        assertTrue(ContainerFormat.MP3.isCompatibleWith(VideoCodec.NONE, AudioCodec.MP3))
+        assertFalse(ContainerFormat.MP3.isCompatibleWith(VideoCodec.H264, AudioCodec.MP3))
     }
 
     @Test

@@ -78,6 +78,9 @@ fun main() = application {
                 }
             }
 
+            // Full conversion settings modal dialog
+            ConversionConfigDialog(state = state)
+
             // Logs Dialog
             state.activeJobForLogs?.let { job ->
                 JobLogsDialog(

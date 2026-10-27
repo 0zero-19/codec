@@ -160,14 +160,19 @@ fun Sidebar(state: DesktopState) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
+                    val engineLabel = state.systemCaps?.ffmpegVersion?.substringBefore(" ") ?: "FFmpeg Core"
                     Text(
-                        text = "FFmpeg 9.0 Core",
+                        text = engineLabel,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (hasHw) "HW Accel Active" else "Software Mode",
+                        text = if (lang == io.codec.model.AppLanguage.RU) {
+                            if (hasHw) "Аппаратное ускорение" else "Программный режим"
+                        } else {
+                            if (hasHw) "HW Accel Active" else "Software Mode"
+                        },
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

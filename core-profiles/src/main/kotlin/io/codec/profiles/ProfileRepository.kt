@@ -32,7 +32,9 @@ class ProfileRepository(
         val customProfiles = if (profilesFile.exists()) {
             try {
                 val content = profilesFile.readText()
-                json.decodeFromString<List<PresetProfile>>(content)
+                val list = json.decodeFromString<List<PresetProfile>>(content)
+                // Filter out any legacy built-ins that may have been saved to custom profiles.json
+                list.filter { !it.isBuiltIn && it.id != "builtin-batch-convert" }
             } catch (_: Exception) {
                 emptyList()
             }
@@ -47,24 +49,62 @@ class ProfileRepository(
         val updated = _profiles.value.toMutableList()
         val index = updated.indexOfFirst { it.id == profile.id }
 
-        val toSave = profile.copy(isBuiltIn = false)
+        val validated = validateProfile(profile.copy(isBuiltIn = false))
         if (index >= 0) {
-            updated[index] = toSave
+            updated[index] = validated
         } else {
-            updated.add(toSave)
+            updated.add(validated)
         }
 
         _profiles.value = updated
         persistCustomProfiles()
     }
 
+    suspend fun duplicateCustomProfile(id: String): PresetProfile? = withContext(Dispatchers.IO) {
+        val original = _profiles.value.firstOrNull { it.id == id } ?: return@withContext null
+        val copy = original.copy(
+            id = UUID.randomUUID().toString(),
+            name = "${original.name} (Copy)",
+            isBuiltIn = false,
+            isDefault = false
+        )
+        saveCustomProfile(copy)
+        copy
+    }
+
+    suspend fun renameCustomProfile(id: String, newName: String, newDescription: String? = null): Boolean = withContext(Dispatchers.IO) {
+        val original = _profiles.value.firstOrNull { it.id == id } ?: return@withContext false
+        if (original.isBuiltIn) return@withContext false
+        val updated = original.copy(
+            name = newName.trim(),
+            description = newDescription?.trim() ?: original.description
+        )
+        saveCustomProfile(updated)
+        true
+    }
+
     suspend fun deleteCustomProfile(id: String): Boolean = withContext(Dispatchers.IO) {
         val profile = _profiles.value.firstOrNull { it.id == id } ?: return@withContext false
-        if (profile.isBuiltIn) return@withContext false // cannot delete built-in
+        if (profile.isBuiltIn) return@withContext false // Protected: cannot delete built-in batch preset
 
         _profiles.value = _profiles.value.filter { it.id != id }
         persistCustomProfiles()
         true
+    }
+
+    suspend fun setDefaultProfile(id: String): Boolean = withContext(Dispatchers.IO) {
+        if (_profiles.value.none { it.id == id }) return@withContext false
+        _profiles.value = _profiles.value.map {
+            it.copy(isDefault = it.id == id)
+        }
+        persistCustomProfiles()
+        true
+    }
+
+    fun getDefaultProfile(): PresetProfile {
+        return _profiles.value.firstOrNull { it.isDefault }
+            ?: _profiles.value.firstOrNull { it.id == BATCH_PRESET_ID }
+            ?: _profiles.value.first()
     }
 
     suspend fun exportProfilesToJson(file: File): Result<Unit> = withContext(Dispatchers.IO) {
@@ -87,8 +127,14 @@ class ProfileRepository(
             val toAdd = mutableListOf<PresetProfile>()
 
             for (p in imported) {
-                val newId = if (existingIds.contains(p.id)) UUID.randomUUID().toString() else p.id
-                toAdd.add(p.copy(id = newId, isBuiltIn = false))
+                // Ensure valid encoding parameters
+                val safe = validateProfile(p)
+                val newId = if (existingIds.contains(safe.id) || safe.id == BATCH_PRESET_ID) {
+                    UUID.randomUUID().toString()
+                } else {
+                    safe.id
+                }
+                toAdd.add(safe.copy(id = newId, isBuiltIn = false, isDefault = false))
                 count++
             }
 
@@ -98,6 +144,20 @@ class ProfileRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private fun validateProfile(profile: PresetProfile): PresetProfile {
+        val opt = profile.options
+        val crf = opt.video.crf.coerceIn(0, 51)
+        val vBitrate = maxOf(64, opt.video.videoBitrateKbps)
+        val aBitrate = maxOf(32, opt.audio.bitrateKbps)
+        val safeName = if (profile.name.isBlank()) "Custom Preset" else profile.name
+
+        val validatedVideo = opt.video.copy(crf = crf, videoBitrateKbps = vBitrate)
+        val validatedAudio = opt.audio.copy(bitrateKbps = aBitrate)
+        val validatedOptions = opt.copy(video = validatedVideo, audio = validatedAudio)
+
+        return profile.copy(name = safeName, options = validatedOptions)
     }
 
     private fun persistCustomProfiles() {
@@ -113,6 +173,8 @@ class ProfileRepository(
     }
 
     companion object {
+        const val BATCH_PRESET_ID = "builtin-batch-convert"
+
         fun defaultStorageDir(): File {
             val userHome = System.getProperty("user.home")
             return File(userHome, ".codec")
@@ -120,11 +182,10 @@ class ProfileRepository(
 
         fun createBuiltInProfiles(): List<PresetProfile> {
             return listOf(
-                // General & HandBrake Style
                 PresetProfile(
-                    id = "builtin-fast-1080p",
-                    name = "Fast 1080p30",
-                    description = "Standard high-speed H.264 Full HD encoding with AAC audio",
+                    id = BATCH_PRESET_ID,
+                    name = "Batch Video Conversion / Массовая конвертация видео",
+                    description = "Universal batch conversion for multiple videos (MP4, H.264, AAC, 1080p, CRF 22)",
                     category = ProfileCategory.GENERAL,
                     options = ConversionOptions(
                         video = VideoSettings(
@@ -133,277 +194,20 @@ class ProfileRepository(
                             qualityMode = QualityMode.CRF,
                             crf = 22,
                             preset = PresetSpeed.FAST,
-                            resolutionPreset = ResolutionPreset.P1080,
-                            targetFps = 30.0
+                            resolutionPreset = ResolutionPreset.ORIGINAL,
+                            framerateMode = FramerateMode.SAME_AS_SOURCE
                         ),
                         audio = AudioSettings(
                             codec = AudioCodec.AAC,
                             bitrateKbps = 192,
-                            channels = ChannelMode.STEREO
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-hq-1080p",
-                    name = "HQ 1080p30 (High Quality)",
-                    description = "High quality slower H.264 encode for sharp crisp visuals",
-                    category = ProfileCategory.GENERAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H264,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.CRF,
-                            crf = 19,
-                            preset = PresetSpeed.SLOW,
-                            resolutionPreset = ResolutionPreset.P1080,
-                            targetFps = 30.0
+                            channels = ChannelMode.STEREO,
+                            sampleRateHz = 48000
                         ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 256,
-                            channels = ChannelMode.STEREO
-                        )
+                        collisionBehavior = FileCollisionBehavior.UNIQUE_NAME,
+                        outputFileNameTemplate = "{name}_converted.{ext}"
                     ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-veryfast-720p",
-                    name = "Very Fast 720p30",
-                    description = "Ultra rapid encoding for quick sharing",
-                    category = ProfileCategory.GENERAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H264,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.CRF,
-                            crf = 24,
-                            preset = PresetSpeed.VERYFAST,
-                            resolutionPreset = ResolutionPreset.P720,
-                            targetFps = 30.0
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 128
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-
-                // Web & AV1
-                PresetProfile(
-                    id = "builtin-webm-av1-1080p",
-                    name = "WebM AV1 1080p",
-                    description = "Next-gen AV1 video compression with Opus audio",
-                    category = ProfileCategory.WEB,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.AV1,
-                            container = ContainerFormat.WEBM,
-                            qualityMode = QualityMode.CRF,
-                            crf = 28,
-                            preset = PresetSpeed.MEDIUM,
-                            resolutionPreset = ResolutionPreset.P1080
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.OPUS,
-                            bitrateKbps = 128
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-
-                // Social Media Compression
-                PresetProfile(
-                    id = "builtin-discord-25mb",
-                    name = "Discord File Limit (25 MB)",
-                    description = "Compress video to fit Discord upload limit (2-Pass exact size)",
-                    category = ProfileCategory.SOCIAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H264,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.TWO_PASS,
-                            targetSizeMb = 24.5,
-                            preset = PresetSpeed.MEDIUM
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 128
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-discord-10mb",
-                    name = "Discord Free Limit (10 MB)",
-                    description = "Compress video to under 10 MB for free Discord accounts",
-                    category = ProfileCategory.SOCIAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H264,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.TWO_PASS,
-                            targetSizeMb = 9.8,
-                            preset = PresetSpeed.FAST,
-                            resolutionPreset = ResolutionPreset.P720
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 96
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-telegram-video",
-                    name = "Telegram Video (Fast Streaming)",
-                    description = "Optimized for instant mobile playback in Telegram channels",
-                    category = ProfileCategory.SOCIAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H264,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.CRF,
-                            crf = 23,
-                            preset = PresetSpeed.FAST,
-                            resolutionPreset = ResolutionPreset.P720
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 128
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-youtube-4k",
-                    name = "YouTube 4K UHD",
-                    description = "High bitrate 4K video ready for YouTube creator uploads",
-                    category = ProfileCategory.WEB,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H265,
-                            container = ContainerFormat.MP4,
-                            qualityMode = QualityMode.CRF,
-                            crf = 18,
-                            preset = PresetSpeed.SLOW,
-                            resolutionPreset = ResolutionPreset.P4K,
-                            targetFps = 60.0
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.AAC,
-                            bitrateKbps = 320
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-
-                // Archival & Production
-                PresetProfile(
-                    id = "builtin-archive-hevc",
-                    name = "Archive H.265 (Max Compression)",
-                    description = "High efficiency H.265 archival preset to save 50%+ disk space",
-                    category = ProfileCategory.PRODUCTION,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.H265,
-                            container = ContainerFormat.MKV,
-                            qualityMode = QualityMode.CRF,
-                            crf = 23,
-                            preset = PresetSpeed.SLOW
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.OPUS,
-                            bitrateKbps = 128
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-prores-master",
-                    name = "Apple ProRes Intermediate",
-                    description = "Lossless visual quality for video editing in Premiere / DaVinci",
-                    category = ProfileCategory.PRODUCTION,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            codec = VideoCodec.PRORES,
-                            container = ContainerFormat.MOV,
-                            qualityMode = QualityMode.CRF,
-                            profile = "standard"
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.WAV_PCM
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-
-                // Audio Only
-                PresetProfile(
-                    id = "builtin-audio-mp3-320",
-                    name = "MP3 High Quality (320 kbps)",
-                    description = "Maximum MP3 bitrate for universal playback",
-                    category = ProfileCategory.AUDIO,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            container = ContainerFormat.MP3
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.MP3,
-                            bitrateKbps = 320,
-                            normalizeLoudness = true
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-audio-flac-lossless",
-                    name = "FLAC Studio Lossless",
-                    description = "Bit-perfect lossless audio preservation",
-                    category = ProfileCategory.AUDIO,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            container = ContainerFormat.FLAC
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.FLAC
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-                PresetProfile(
-                    id = "builtin-audio-opus-voice",
-                    name = "Opus Voice & Podcast (64 kbps)",
-                    description = "Crystal clear speech encoding at minuscule file size",
-                    category = ProfileCategory.AUDIO,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            container = ContainerFormat.OPUS
-                        ),
-                        audio = AudioSettings(
-                            codec = AudioCodec.OPUS,
-                            bitrateKbps = 64,
-                            normalizeLoudness = true
-                        )
-                    ),
-                    isBuiltIn = true
-                ),
-
-                // Animated GIF
-                PresetProfile(
-                    id = "builtin-gif-high-quality",
-                    name = "High Quality Animated GIF",
-                    description = "2-pass palette optimized GIF animation from video clip",
-                    category = ProfileCategory.GENERAL,
-                    options = ConversionOptions(
-                        video = VideoSettings(
-                            container = ContainerFormat.GIF,
-                            resolutionPreset = ResolutionPreset.P480,
-                            targetFps = 15.0
-                        )
-                    ),
-                    isBuiltIn = true
+                    isBuiltIn = true,
+                    isDefault = true
                 )
             )
         }

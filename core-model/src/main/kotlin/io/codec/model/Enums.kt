@@ -38,6 +38,83 @@ enum class ContainerFormat(
             return entries.firstOrNull { it.extension == clean } ?: MP4
         }
     }
+
+    fun supportedVideoCodecs(): List<VideoCodec> {
+        if (isAudioOnly || isAnimatedImage) return listOf(VideoCodec.NONE)
+        return when (this) {
+            WEBM -> listOf(VideoCodec.VP9, VideoCodec.AV1, VideoCodec.VP8, VideoCodec.COPY, VideoCodec.NONE)
+            MP4, M4V -> listOf(VideoCodec.H264, VideoCodec.H265, VideoCodec.AV1, VideoCodec.MPEG4, VideoCodec.COPY, VideoCodec.NONE)
+            MOV -> listOf(VideoCodec.H264, VideoCodec.H265, VideoCodec.PRORES, VideoCodec.MPEG4, VideoCodec.COPY, VideoCodec.NONE)
+            AVI -> listOf(VideoCodec.H264, VideoCodec.MPEG4, VideoCodec.COPY, VideoCodec.NONE)
+            WMV -> listOf(VideoCodec.MPEG4, VideoCodec.COPY, VideoCodec.NONE)
+            FLV -> listOf(VideoCodec.H264, VideoCodec.COPY, VideoCodec.NONE)
+            TS -> listOf(VideoCodec.H264, VideoCodec.H265, VideoCodec.MPEG4, VideoCodec.COPY, VideoCodec.NONE)
+            MKV, OGV -> VideoCodec.entries.toList()
+            else -> listOf(VideoCodec.H264, VideoCodec.COPY, VideoCodec.NONE)
+        }
+    }
+
+    fun supportedAudioCodecs(): List<AudioCodec> {
+        if (isAnimatedImage) return listOf(AudioCodec.NONE)
+        return when (this) {
+            MP3 -> listOf(AudioCodec.MP3, AudioCodec.COPY, AudioCodec.NONE)
+            AAC -> listOf(AudioCodec.AAC, AudioCodec.COPY, AudioCodec.NONE)
+            M4A -> listOf(AudioCodec.AAC, AudioCodec.ALAC, AudioCodec.COPY, AudioCodec.NONE)
+            FLAC -> listOf(AudioCodec.FLAC, AudioCodec.COPY, AudioCodec.NONE)
+            WAV -> listOf(AudioCodec.WAV_PCM, AudioCodec.COPY, AudioCodec.NONE)
+            OGG -> listOf(AudioCodec.VORBIS, AudioCodec.OPUS, AudioCodec.FLAC, AudioCodec.COPY, AudioCodec.NONE)
+            OPUS -> listOf(AudioCodec.OPUS, AudioCodec.COPY, AudioCodec.NONE)
+            WEBM -> listOf(AudioCodec.OPUS, AudioCodec.VORBIS, AudioCodec.COPY, AudioCodec.NONE)
+            MP4, M4V -> listOf(AudioCodec.AAC, AudioCodec.MP3, AudioCodec.OPUS, AudioCodec.ALAC, AudioCodec.AC3, AudioCodec.COPY, AudioCodec.NONE)
+            MOV -> listOf(AudioCodec.AAC, AudioCodec.MP3, AudioCodec.ALAC, AudioCodec.WAV_PCM, AudioCodec.AC3, AudioCodec.COPY, AudioCodec.NONE)
+            AVI -> listOf(AudioCodec.MP3, AudioCodec.WAV_PCM, AudioCodec.AC3, AudioCodec.COPY, AudioCodec.NONE)
+            MKV -> AudioCodec.entries.toList()
+            else -> listOf(AudioCodec.AAC, AudioCodec.MP3, AudioCodec.COPY, AudioCodec.NONE)
+        }
+    }
+
+    fun isCompatibleWith(videoCodec: VideoCodec, audioCodec: AudioCodec): Boolean {
+        if (isAudioOnly) {
+            return (videoCodec == VideoCodec.NONE) && supportedAudioCodecs().contains(audioCodec)
+        }
+        if (isAnimatedImage) {
+            return audioCodec == AudioCodec.NONE
+        }
+        val videoOk = supportedVideoCodecs().contains(videoCodec)
+        val audioOk = supportedAudioCodecs().contains(audioCodec)
+        return videoOk && audioOk
+    }
+
+    fun getCompatibilityWarning(videoCodec: VideoCodec, audioCodec: AudioCodec): String? {
+        if (isAudioOnly && videoCodec != VideoCodec.NONE) {
+            return "This container is audio-only. Video track will be stripped."
+        }
+        if (this == WEBM && videoCodec != VideoCodec.VP8 && videoCodec != VideoCodec.VP9 && videoCodec != VideoCodec.AV1 && videoCodec != VideoCodec.COPY && videoCodec != VideoCodec.NONE) {
+            return "WebM strictly requires VP8, VP9, or AV1 video codecs."
+        }
+        if (this == WEBM && audioCodec != AudioCodec.OPUS && audioCodec != AudioCodec.VORBIS && audioCodec != AudioCodec.COPY && audioCodec != AudioCodec.NONE) {
+            return "WebM strictly requires Opus or Vorbis audio codecs."
+        }
+        if (this == AVI && (videoCodec == VideoCodec.H265 || videoCodec == VideoCodec.AV1)) {
+            return "AVI does not reliably support modern H.265 or AV1 codecs. Use MP4 or MKV."
+        }
+        return null
+    }
+}
+
+@Serializable
+enum class FileCollisionBehavior(val displayName: String) {
+    UNIQUE_NAME("Create unique name"),
+    OVERWRITE("Overwrite existing file"),
+    SKIP("Skip file if exists")
+}
+
+@Serializable
+enum class CompressionPresetMode(val displayName: String) {
+    BALANCED("Balanced"),
+    MAX_QUALITY("Maximum Quality"),
+    MIN_SIZE("Minimum File Size"),
+    CUSTOM("Custom Parameters")
 }
 
 @Serializable

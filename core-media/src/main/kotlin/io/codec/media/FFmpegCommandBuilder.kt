@@ -44,6 +44,23 @@ class FFmpegCommandBuilder(
 
         val isGif = options.video.container == ContainerFormat.GIF
 
+        // Stream mapping: explicitly map selected streams to prevent unintended stream loss/selection
+        if (options.video.selectedVideoStreamIndex != null) {
+            args.add("-map")
+            args.add("0:v:${options.video.selectedVideoStreamIndex}")
+        } else if (!options.video.container.isAudioOnly && !isGif && options.video.codec != VideoCodec.NONE) {
+            args.add("-map")
+            args.add("0:v:0?")
+        }
+
+        if (options.audio.selectedAudioStreamIndex != null) {
+            args.add("-map")
+            args.add("0:a:${options.audio.selectedAudioStreamIndex}")
+        } else if (!isGif && !options.audio.stripAudio && options.audio.codec != AudioCodec.NONE && !(totalPasses == 2 && pass == 1)) {
+            args.add("-map")
+            args.add("0:a:0?")
+        }
+
         // Video settings
         if (isGif) {
             buildGifEncoding(args, options)
@@ -63,6 +80,12 @@ class FFmpegCommandBuilder(
         // Subtitle settings
         if (!isGif && !options.video.container.isAudioOnly) {
             buildSubtitleEncoding(args, options)
+        }
+
+        // MP4 / MOV Web Optimization (Faststart)
+        if (options.video.container == ContainerFormat.MP4 || options.video.container == ContainerFormat.MOV || options.video.container == ContainerFormat.M4V) {
+            args.add("-movflags")
+            args.add("+faststart")
         }
 
         // Metadata
@@ -252,6 +275,13 @@ class FFmpegCommandBuilder(
                 args.add("-pix_fmt")
                 args.add(it)
             }
+        }
+
+        // Tag for Apple/Windows HEVC compatibility in MP4 containers
+        if ((video.codec == VideoCodec.H265 || encoder.contains("hevc") || encoder.contains("265")) &&
+            (options.video.container == ContainerFormat.MP4 || options.video.container == ContainerFormat.M4V || options.video.container == ContainerFormat.MOV)) {
+            args.add("-tag:v")
+            args.add("hvc1")
         }
 
         // Video Filter chain
@@ -451,7 +481,7 @@ class FFmpegCommandBuilder(
     }
 
     private fun resolveTargetDimensions(video: VideoSettings, mediaInfo: MediaInfo?): Pair<Int, Int> {
-        return when (video.resolutionPreset) {
+        val (rawW, rawH) = when (video.resolutionPreset) {
             ResolutionPreset.ORIGINAL -> {
                 val orig = mediaInfo?.primaryVideoStream
                 if (orig != null && orig.width > 0 && orig.height > 0) {
@@ -469,6 +499,9 @@ class FFmpegCommandBuilder(
                 video.resolutionPreset.width to video.resolutionPreset.height
             }
         }
+        val evenW = if (rawW > 0) (rawW / 2) * 2 else 0
+        val evenH = if (rawH > 0) (rawH / 2) * 2 else 0
+        return evenW to evenH
     }
 
     fun calculateTargetBitrateKbps(options: ConversionOptions, mediaInfo: MediaInfo?): Int {
